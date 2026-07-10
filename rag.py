@@ -22,9 +22,18 @@ class RAG:
 
     def answer(self, question: str, top_k: int = 4) -> tuple[str, list[dict]]:  # 定义根据问题生成答案的方法。
         query_embedding = self.embedder.encode([question], normalize_embeddings=True).tolist()  # 将问题转换为向量。
-        result = self.collection.query(query_embeddings=query_embedding, n_results=top_k)  # 搜索最相关的文本片段。
+        result = self.collection.query(  # 搜索最相关的文本片段。
+            query_embeddings=query_embedding,  # 使用问题向量进行检索。
+            n_results=top_k,  # 返回最相关的若干片段。
+            include=["documents", "metadatas", "distances"],  # 同时返回原文、来源和距离。
+        )  # 完成向量检索。
         docs = result.get("documents", [[]])[0]  # 获取检索到的文本内容。
         metas = result.get("metadatas", [[]])[0]  # 获取检索结果的来源信息。
+        distances = result.get("distances", [[]])[0]  # 获取每个片段与问题的距离。
+        references = [  # 组合成网页需要展示的参考资料列表。
+            {**meta, "text": doc, "distance": distance}  # 保存来源、原文和相似度距离。
+            for doc, meta, distance in zip(docs, metas, distances)  # 同时遍历文本、来源和距离。
+        ]  # 完成参考资料列表。
         context = "\n\n".join(  # 将多个文本片段拼接成参考资料。
             f"[来源: {meta['source']}，第 {meta['chunk']} 个片段]\n{doc}"  # 给每段资料标记来源。
             for doc, meta in zip(docs, metas)  # 同时遍历文本和对应的元数据。
@@ -37,4 +46,4 @@ class RAG:
                 {"role": "user", "content": f"参考资料:\n{context}\n\n问题: {question}"},  # 发送资料和用户问题。
             ],  # 结束消息列表。
         )  # 完成模型调用。
-        return response.choices[0].message.content, metas  # 返回答案和来源信息。
+        return response.choices[0].message.content, references  # 返回答案和完整参考资料。

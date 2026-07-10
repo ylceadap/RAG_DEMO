@@ -36,6 +36,13 @@ if question:  # 只有用户输入问题后才继续处理。
             st.markdown(answer)  # 显示助手回答。
             if sources:  # 判断是否检索到了来源。
                 st.caption("检索到的来源：" + "、".join(sorted({s["source"] for s in sources})))  # 显示来源文件名。
+                with st.expander("查看参考资料"):  # 创建可展开的参考资料区域。
+                    for number, source in enumerate(sources, start=1):  # 遍历所有检索结果。
+                        st.markdown(  # 显示参考资料的来源和检索距离。
+                            f"**参考片段 {number}：{source['source']} · 第 {source['chunk']} 个片段**  "
+                            f"\n检索距离：`{source['distance']:.4f}`"
+                        )  # 结束来源信息展示。
+                        st.code(source["text"], language="text")  # 展示模型实际使用的原文。
             st.session_state.messages.append({"role": "assistant", "content": answer})  # 保存助手回答。
         except Exception as exc:  # 捕获运行过程中的异常。
             st.error(str(exc))  # 在网页中显示错误信息。
