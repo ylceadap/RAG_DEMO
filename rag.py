@@ -10,6 +10,11 @@ SYSTEM_PROMPT = """你是一个公司内部资料问答助手。
 回答尽量简洁，并在最后列出使用的来源文件。
 """
 
+SUMMARY_PROMPT = """你负责整理一段公司资料问答对话的长期记忆。
+请保留已经确认的事实、用户关心的主题、上下文指代和未解决的问题。
+删除寒暄、重复内容和无关细节，不要添加对话中没有出现的信息。
+请用简洁的中文输出摘要。"""  # 设置对话摘要生成规则。
+
 
 class RAG:
     def __init__(self):  # 初始化 RAG 问答对象。
@@ -20,10 +25,33 @@ class RAG:
         self.collection = client.get_or_create_collection(COLLECTION_NAME)  # 获取文档向量集合。
         self.llm = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")  # 创建 DeepSeek 客户端。
 
+    def summarize_history(  # 定义把较早对话压缩成摘要的方法。
+        self,  # 传入当前 RAG 对象。
+        messages: list[dict],  # 接收需要被压缩的历史消息。
+        existing_summary: str = "",  # 接收之前已经生成的摘要。
+    ) -> str:  # 返回新的长期记忆摘要。
+        history_text = "\n".join(  # 将待摘要的消息整理成文本。
+            f"{message['role']}: {message['content']}"  # 标记消息角色和内容。
+            for message in messages  # 遍历待摘要的历史消息。
+        )  # 完成历史消息拼接。
+        response = self.llm.chat.completions.create(  # 调用 DeepSeek 生成摘要。
+            model=DEEPSEEK_MODEL,  # 指定使用的模型。
+            temperature=0.1,  # 使用较低随机性，保持摘要稳定。
+            messages=[  # 构造摘要请求消息。
+                {"role": "system", "content": SUMMARY_PROMPT},  # 设置摘要规则。
+                {  # 创建包含旧摘要和新增对话的用户消息。
+                    "role": "user",  # 标记这是用户输入内容。
+                    "content": f"已有摘要:\n{existing_summary}\n\n新增对话:\n{history_text}",  # 发送摘要和新增对话。
+                },  # 结束用户消息。
+            ],  # 结束消息列表。
+        )  # 完成摘要生成。
+        return response.choices[0].message.content or existing_summary  # 返回新摘要，异常为空时保留旧摘要。
+
     def answer(  # 定义根据当前问题和历史对话生成答案的方法。
         self,  # 传入当前 RAG 对象。
         question: str,  # 接收用户当前的问题。
         history: list[dict] | None = None,  # 接收之前的聊天记录。
+        summary: str = "",  # 接收较早对话的摘要记忆。
         top_k: int = 4,  # 设置最多检索的文档片段数。
     ) -> tuple[str, list[dict]]:  # 返回答案和参考资料。
         history = history or []  # 没有历史记录时使用空列表。
@@ -32,7 +60,7 @@ class RAG:
             f"{message['role']}: {message['content']}"  # 标记消息角色和内容。
             for message in recent_history  # 遍历最近的历史消息。
         )  # 完成历史消息拼接。
-        retrieval_query = f"对话历史:\n{history_text}\n\n当前问题:\n{question}"  # 将上下文和当前问题合并用于检索。
+        retrieval_query = f"长期记忆:\n{summary}\n\n对话历史:\n{history_text}\n\n当前问题:\n{question}"  # 将摘要、上下文和当前问题合并用于检索。
         query_embedding = self.embedder.encode([retrieval_query], normalize_embeddings=True).tolist()  # 将带上下文的问题转换为向量。
         result = self.collection.query(  # 搜索最相关的文本片段。
             query_embeddings=query_embedding,  # 使用问题向量进行检索。
@@ -55,7 +83,7 @@ class RAG:
         ]  # 先放入系统规则。
         messages.extend(recent_history)  # 加入最近几轮历史对话。
         messages.append(  # 加入当前问题和检索资料。
-            {"role": "user", "content": f"参考资料:\n{context}\n\n当前问题: {question}"}  # 发送资料和当前问题。
+            {"role": "user", "content": f"长期记忆:\n{summary}\n\n参考资料:\n{context}\n\n当前问题: {question}"}  # 发送记忆、资料和当前问题。
         )  # 完成当前问题消息。
         response = self.llm.chat.completions.create(  # 调用 DeepSeek 对话接口。
             model=DEEPSEEK_MODEL,  # 指定使用的模型。

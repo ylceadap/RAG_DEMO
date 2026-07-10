@@ -13,6 +13,8 @@ with st.sidebar:  # 创建左侧边栏区域。
     st.write(f"把 .txt、.md 或 .pdf 文件放入：\n`{DATA_DIR}`")  # 告诉用户文档放置位置。
     if st.button("清空当前对话"):  # 创建清空聊天记录按钮。
         st.session_state.messages = []  # 删除当前网页会话中的所有聊天记录。
+        st.session_state.conversation_summary = ""  # 删除当前会话的长期记忆摘要。
+        st.session_state.summarized_count = 0  # 重置已摘要消息计数。
         st.rerun()  # 立即刷新页面，让界面显示为空白对话。
     if st.button("重新导入文档"):  # 创建重新导入文档按钮。
         with st.spinner("正在切分文档并建立索引，首次运行会下载 Embedding 模型..."):  # 显示处理中的提示。
@@ -23,6 +25,10 @@ with st.sidebar:  # 创建左侧边栏区域。
 
 if "messages" not in st.session_state:  # 判断当前会话是否已有聊天记录。
     st.session_state.messages = []  # 初始化聊天记录列表。
+if "conversation_summary" not in st.session_state:  # 判断当前会话是否已有长期记忆摘要。
+    st.session_state.conversation_summary = ""  # 初始化长期记忆摘要。
+if "summarized_count" not in st.session_state:  # 判断是否记录过已摘要的消息数量。
+    st.session_state.summarized_count = 0  # 初始化已摘要消息计数。
 
 for message in st.session_state.messages:  # 遍历历史聊天记录。
     with st.chat_message(message["role"]):  # 按用户或助手身份显示消息。
@@ -35,9 +41,21 @@ if question:  # 只有用户输入问题后才继续处理。
         st.markdown(question)  # 显示用户问题。
     with st.chat_message("assistant"):  # 创建助手消息气泡。
         try:  # 尝试执行检索和问答。
-            answer, sources = RAG().answer(  # 检索资料并生成结合历史的回答。
+            rag = RAG()  # 创建本轮问答使用的 RAG 对象。
+            history = st.session_state.messages[:-1]  # 获取当前问题之前的全部历史消息。
+            raw_history_start = st.session_state.summarized_count  # 获取尚未纳入摘要的消息起点。
+            if len(history) - raw_history_start > 6:  # 判断是否有超过三轮的旧对话需要摘要。
+                summary_end = len(history) - 6  # 保留最近六条消息作为原始上下文。
+                messages_to_summarize = history[raw_history_start:summary_end]  # 取出需要压缩的旧消息。
+                st.session_state.conversation_summary = rag.summarize_history(  # 更新长期记忆摘要。
+                    messages_to_summarize,  # 传入本次新增的旧消息。
+                    st.session_state.conversation_summary,  # 传入已有摘要作为基础。
+                )  # 完成摘要更新。
+                st.session_state.summarized_count = summary_end  # 记录已经摘要到哪条消息。
+            answer, sources = rag.answer(  # 检索资料并生成结合摘要和历史的回答。
                 question,  # 传入当前用户问题。
-                history=st.session_state.messages[:-1],  # 传入当前问题之前的历史消息。
+                history=history[-6:],  # 传入最近三轮原始对话。
+                summary=st.session_state.conversation_summary,  # 传入更早对话的摘要。
             )  # 完成多轮问答调用。
             st.markdown(answer)  # 显示助手回答。
             if sources:  # 判断是否检索到了来源。
