@@ -22,4 +22,5 @@ From the repository root:
 
 ```bash
 PYTHONPATH=langchain_version .venv/bin/python -m unittest discover -s langchain_version/tests -p 'test_*.py'
+PYTHONPATH=langchain_version .venv/bin/python langchain_version/tests/evaluate_retrieval.py
 ```
