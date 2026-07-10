@@ -1,3 +1,6 @@
+import ast  # 导入语法树工具，用于安全解析简单数学表达式。
+import operator  # 导入运算符函数，用于执行允许的数学运算。
+
 import chromadb  # 导入 ChromaDB，用于搜索相关文档片段。
 from openai import OpenAI  # 导入 OpenAI 兼容客户端，用于调用 DeepSeek。
 from sentence_transformers import SentenceTransformer  # 导入文本向量模型。
@@ -5,15 +8,58 @@ from sentence_transformers import SentenceTransformer  # 导入文本向量模�
 from config import CHROMA_DIR, COLLECTION_NAME, DEEPSEEK_API_KEY, DEEPSEEK_MODEL  # 导入配置项。
 from ingest import EMBEDDING_MODEL  # 复用建立索引时使用的向量模型名称。
 
-SYSTEM_PROMPT = """你是一个公司内部资料问答助手。
-请严格根据参考资料回答，不要凭空编造。若参考资料中没有答案，请明确说“资料中没有找到相关信息”。
-回答尽量简洁，并在最后列出使用的来源文件。
+SYSTEM_PROMPT = """你是一个公司资料问答助手。
+对于公司制度、员工手册和产品资料问题，必须严格根据参考资料回答，不要凭空编造。
+如果参考资料与问题无关，但问题属于简单数学、常识或一般闲聊，可以直接回答。
+如果是公司资料类问题且参考资料中没有答案，请明确说“资料中没有找到相关信息”。
+回答尽量简洁；使用参考资料时，在最后列出使用的来源文件。
 """
 
 SUMMARY_PROMPT = """你负责整理一段公司资料问答对话的长期记忆。
 请保留已经确认的事实、用户关心的主题、上下文指代和未解决的问题。
 删除寒暄、重复内容和无关细节，不要添加对话中没有出现的信息。
 请用简洁的中文输出摘要。"""  # 设置对话摘要生成规则。
+
+ALLOWED_OPERATORS = {  # 设置允许执行的数学运算。
+    ast.Add: operator.add,  # 允许加法。
+    ast.Sub: operator.sub,  # 允许减法。
+    ast.Mult: operator.mul,  # 允许乘法。
+    ast.Div: operator.truediv,  # 允许除法。
+    ast.Pow: operator.pow,  # 允许乘方。
+}
+
+
+def calculate_math(expression: str) -> int | float:  # 安全计算简单数学表达式。
+    tree = ast.parse(expression, mode="eval")  # 将表达式解析成语法树。
+
+    def evaluate(node: ast.AST) -> int | float:  # 递归计算语法树节点。
+        if isinstance(node, ast.Expression):  # 判断是否为表达式根节点。
+            return evaluate(node.body)  # 继续计算根节点中的实际内容。
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):  # 判断是否为数字。
+            return node.value  # 返回数字值。
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):  # 判断是否为正负号。
+            value = evaluate(node.operand)  # 计算正负号后面的数字。
+            return value if isinstance(node.op, ast.UAdd) else -value  # 返回正数或负数。
+        if isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPERATORS:  # 判断是否为允许的二元运算。
+            left = evaluate(node.left)  # 计算左侧数字。
+            right = evaluate(node.right)  # 计算右侧数字。
+            return ALLOWED_OPERATORS[type(node.op)](left, right)  # 执行数学运算。
+        raise ValueError("只支持简单数学表达式")  # 拒绝函数、变量等不安全内容。
+
+    result = evaluate(tree)  # 计算完整表达式。
+    if abs(result) > 10**12:  # 限制结果大小，避免异常计算。
+        raise ValueError("数学结果超出支持范围")  # 拒绝过大的结果。
+    return result  # 返回数学结果。
+
+
+def extract_math_expression(question: str) -> str | None:  # 从问题中提取简单数学表达式。
+    cleaned = question.strip().replace("？", "").replace("?", "")  # 清理问题两端空格和问号。
+    for suffix in ("等于多少", "是多少", "等于几", "等于") :  # 遍历常见数学提问后缀。
+        if cleaned.endswith(suffix):  # 判断问题是否以数学后缀结尾。
+            cleaned = cleaned[: -len(suffix)].strip()  # 删除数学提问后缀。
+            break  # 找到后缀后停止遍历。
+    allowed = set("0123456789+-*/(). ")  # 设置允许出现在表达式中的字符。
+    return cleaned if cleaned and set(cleaned) <= allowed else None  # 只返回纯数学表达式。
 
 
 class RAG:
@@ -54,6 +100,13 @@ class RAG:
         summary: str = "",  # 接收较早对话的摘要记忆。
         top_k: int = 4,  # 设置最多检索的文档片段数。
     ) -> tuple[str, list[dict]]:  # 返回答案和参考资料。
+        math_expression = extract_math_expression(question)  # 判断当前问题是否为简单数学题。
+        if math_expression:  # 如果识别出数学表达式，就直接本地计算。
+            try:  # 尝试计算数学表达式。
+                result = calculate_math(math_expression)  # 执行安全的数学计算。
+                return f"{math_expression} = {result:g}", []  # 直接返回计算结果，不检索公司文档。
+            except (SyntaxError, ValueError, ZeroDivisionError):  # 数学表达式不合法时继续走普通问答流程。
+                pass  # 忽略计算错误，交给后续 RAG 流程处理。
         history = history or []  # 没有历史记录时使用空列表。
         recent_history = history[-6:]  # 只保留最近三轮对话，避免上下文无限变长。
         history_text = "\n".join(  # 将历史消息整理成检索文本。
