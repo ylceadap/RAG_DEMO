@@ -20,8 +20,20 @@ class RAG:
         self.collection = client.get_or_create_collection(COLLECTION_NAME)  # 获取文档向量集合。
         self.llm = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")  # 创建 DeepSeek 客户端。
 
-    def answer(self, question: str, top_k: int = 4) -> tuple[str, list[dict]]:  # 定义根据问题生成答案的方法。
-        query_embedding = self.embedder.encode([question], normalize_embeddings=True).tolist()  # 将问题转换为向量。
+    def answer(  # 定义根据当前问题和历史对话生成答案的方法。
+        self,  # 传入当前 RAG 对象。
+        question: str,  # 接收用户当前的问题。
+        history: list[dict] | None = None,  # 接收之前的聊天记录。
+        top_k: int = 4,  # 设置最多检索的文档片段数。
+    ) -> tuple[str, list[dict]]:  # 返回答案和参考资料。
+        history = history or []  # 没有历史记录时使用空列表。
+        recent_history = history[-6:]  # 只保留最近三轮对话，避免上下文无限变长。
+        history_text = "\n".join(  # 将历史消息整理成检索文本。
+            f"{message['role']}: {message['content']}"  # 标记消息角色和内容。
+            for message in recent_history  # 遍历最近的历史消息。
+        )  # 完成历史消息拼接。
+        retrieval_query = f"对话历史:\n{history_text}\n\n当前问题:\n{question}"  # 将上下文和当前问题合并用于检索。
+        query_embedding = self.embedder.encode([retrieval_query], normalize_embeddings=True).tolist()  # 将带上下文的问题转换为向量。
         result = self.collection.query(  # 搜索最相关的文本片段。
             query_embeddings=query_embedding,  # 使用问题向量进行检索。
             n_results=top_k,  # 返回最相关的若干片段。
@@ -38,12 +50,16 @@ class RAG:
             f"[来源: {meta['source']}，第 {meta['chunk']} 个片段]\n{doc}"  # 给每段资料标记来源。
             for doc, meta in zip(docs, metas)  # 同时遍历文本和对应的元数据。
         )  # 完成参考资料拼接。
+        messages = [  # 创建发送给模型的消息列表。
+            {"role": "system", "content": SYSTEM_PROMPT},  # 设置模型的回答规则。
+        ]  # 先放入系统规则。
+        messages.extend(recent_history)  # 加入最近几轮历史对话。
+        messages.append(  # 加入当前问题和检索资料。
+            {"role": "user", "content": f"参考资料:\n{context}\n\n当前问题: {question}"}  # 发送资料和当前问题。
+        )  # 完成当前问题消息。
         response = self.llm.chat.completions.create(  # 调用 DeepSeek 对话接口。
             model=DEEPSEEK_MODEL,  # 指定使用的模型。
             temperature=0.1,  # 设置较低随机性，让回答更稳定。
-            messages=[  # 构造发送给模型的消息列表。
-                {"role": "system", "content": SYSTEM_PROMPT},  # 设置模型的回答规则。
-                {"role": "user", "content": f"参考资料:\n{context}\n\n问题: {question}"},  # 发送资料和用户问题。
-            ],  # 结束消息列表。
+            messages=messages,  # 传入系统规则、历史对话和当前问题。
         )  # 完成模型调用。
         return response.choices[0].message.content, references  # 返回答案和完整参考资料。

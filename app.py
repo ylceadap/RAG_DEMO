@@ -11,6 +11,9 @@ st.caption("基于本地文档检索 + DeepSeek API")  # 显示网页说明文�
 with st.sidebar:  # 创建左侧边栏区域。
     st.subheader("使用说明")  # 显示边栏小标题。
     st.write(f"把 .txt、.md 或 .pdf 文件放入：\n`{DATA_DIR}`")  # 告诉用户文档放置位置。
+    if st.button("清空当前对话"):  # 创建清空聊天记录按钮。
+        st.session_state.messages = []  # 删除当前网页会话中的所有聊天记录。
+        st.rerun()  # 立即刷新页面，让界面显示为空白对话。
     if st.button("重新导入文档"):  # 创建重新导入文档按钮。
         with st.spinner("正在切分文档并建立索引，首次运行会下载 Embedding 模型..."):  # 显示处理中的提示。
             files, chunks = build_index()  # 读取文档并建立向量索引。
@@ -32,7 +35,10 @@ if question:  # 只有用户输入问题后才继续处理。
         st.markdown(question)  # 显示用户问题。
     with st.chat_message("assistant"):  # 创建助手消息气泡。
         try:  # 尝试执行检索和问答。
-            answer, sources = RAG().answer(question)  # 检索资料并生成回答。
+            answer, sources = RAG().answer(  # 检索资料并生成结合历史的回答。
+                question,  # 传入当前用户问题。
+                history=st.session_state.messages[:-1],  # 传入当前问题之前的历史消息。
+            )  # 完成多轮问答调用。
             st.markdown(answer)  # 显示助手回答。
             if sources:  # 判断是否检索到了来源。
                 st.caption("检索到的来源：" + "、".join(sorted({s["source"] for s in sources})))  # 显示来源文件名。
