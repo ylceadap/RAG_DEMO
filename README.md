@@ -35,7 +35,13 @@ python ingest.py
 streamlit run app.py
 ```
 
-Open the URL shown by Streamlit. Add `.txt`, `.md`, or `.pdf` files to `data/documents/`, then click **Rebuild document index** in the sidebar.
+Open the URL shown by Streamlit. Add `.txt`, `.md`, or `.pdf` files to `data/documents/`, then click **Sync document index** in the sidebar. The sync operation skips unchanged files, updates changed files, adds new files, and removes deleted files.
+
+For a full rebuild, run:
+
+```bash
+python ingest.py --reset
+```
 
 ## Example questions
 

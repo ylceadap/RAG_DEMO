@@ -16,10 +16,10 @@ with st.sidebar:  # 创建左侧边栏区域。
         st.session_state.conversation_summary = ""  # Delete the conversation summary.
         st.session_state.summarized_count = 0  # Reset the summarized-message counter.
         st.rerun()  # Refresh the page with an empty conversation.
-    if st.button("Rebuild document index"):  # Create the rebuild-index button.
-        with st.spinner("Splitting documents and building the index. The embedding model may download on first run..."):  # Show progress text.
-            files, chunks = build_index()  # Read documents and build the vector index.
-        st.success(f"Imported {files} files and created {chunks} text chunks")  # Show the indexing result.
+    if st.button("Sync document index"):  # Create the incremental-index button.
+        with st.spinner("Checking documents and updating the index. The embedding model may download on first run..."):  # Show progress text.
+            files, chunks = build_index()  # Add new files and update changed files only.
+        st.success(f"Updated {files} files and added {chunks} text chunks")  # Show the indexing result.
     if not DEEPSEEK_API_KEY:  # Check whether the API key is missing.
         st.warning("DEEPSEEK_API_KEY is not configured")  # Display a configuration warning.
 
