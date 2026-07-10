@@ -8,15 +8,25 @@ from sentence_transformers import SentenceTransformer  # 导入文本向量模�
 
 from config import CHROMA_DIR, COLLECTION_NAME, DATA_DIR  # 导入项目路径和集合配置。
 
-EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # Use the embedding model configured for the corpus.
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"  # Use an English embedding model for the English corpus.
 CHUNK_SIZE = 700  # Set the maximum size of each text chunk.
 CHUNK_OVERLAP = 100  # Set the overlap between neighboring chunks.
+INDEX_VERSION = "2"  # Increment this when the indexing schema changes.
 
 
 def read_file(path: Path) -> str:  # 定义读取单个文件的函数。
     if path.suffix.lower() == ".pdf":  # 判断文件是否为 PDF。
         reader = PdfReader(str(path))  # 打开 PDF 文件。
-        return "\n".join(page.extract_text() or "" for page in reader.pages)  # 提取并合并每一页文字。
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)  # Extract text from each PDF page.
+        if text.strip():  # Check whether the PDF contains selectable text.
+            return text  # Return the extracted text.
+        try:  # Try the optional OCR fallback for scanned PDFs.
+            from pdf2image import convert_from_path  # Convert PDF pages to images.
+            import pytesseract  # Run OCR on the page images.
+        except ImportError as exc:  # Handle missing OCR dependencies.
+            raise RuntimeError("Scanned PDF detected. Install pytesseract and pdf2image, plus the Tesseract and Poppler system tools.") from exc  # Explain how to enable OCR.
+        images = convert_from_path(str(path), dpi=200)  # Render scanned pages at a readable resolution.
+        return "\n".join(pytesseract.image_to_string(image) for image in images)  # Extract text from the scanned pages.
     return path.read_text(encoding="utf-8")  # 读取普通文本或 Markdown 文件。
 
 
@@ -48,7 +58,8 @@ def build_index(reset: bool = False) -> tuple[int, int]:  # Build or incremental
     ]  # Finish collecting document paths.
     current_sources = {path.name for path in paths}  # Record the files that currently exist.
     existing = collection.get(include=["metadatas"])  # Read existing metadata from the collection.
-    existing_sources = {meta.get("source") for meta in existing.get("metadatas", []) if meta}  # Find indexed sources.
+    existing_metadata = [meta for meta in existing.get("metadatas", []) if meta]  # Collect existing metadata records.
+    existing_sources = {meta.get("source") for meta in existing_metadata}  # Find indexed sources.
     for stale_source in existing_sources - current_sources:  # Find files removed from the document directory.
         collection.delete(where={"source": stale_source})  # Remove stale vectors from the index.
 
@@ -60,8 +71,21 @@ def build_index(reset: bool = False) -> tuple[int, int]:  # Build or incremental
         file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()  # Calculate a stable content hash.
         current_records = collection.get(where={"source": path.name}, include=["metadatas"])  # Read this file's existing records.
         current_metadata = current_records.get("metadatas", [])  # Extract this file's metadata.
-        if current_metadata and all(meta.get("file_hash") == file_hash for meta in current_metadata):  # Check whether the file is unchanged.
+        expected_metadata = {  # Define metadata that must match before a file can be skipped.
+            "file_hash": file_hash,  # Match the document content.
+            "index_version": INDEX_VERSION,  # Match the indexing schema version.
+            "embedding_model": EMBEDDING_MODEL,  # Match the embedding model.
+            "chunk_size": CHUNK_SIZE,  # Match the chunk size.
+            "chunk_overlap": CHUNK_OVERLAP,  # Match the chunk overlap.
+        }  # Finish the metadata compatibility definition.
+        if current_metadata and all(all(meta.get(key) == value for key, value in expected_metadata.items()) for meta in current_metadata):  # Check whether the file is fully up to date.
             continue  # Skip unchanged files and avoid unnecessary embedding work.
+        duplicate_records = collection.get(where={"file_hash": file_hash}, include=["metadatas"])  # Search for identical content under another source name.
+        duplicate_sources = {meta.get("source") for meta in duplicate_records.get("metadatas", []) if meta}  # Collect duplicate source names.
+        if duplicate_sources - {path.name}:  # Check whether identical content is already indexed.
+            if current_metadata:  # Remove an outdated copy if this path used to be indexed.
+                collection.delete(where={"source": path.name})  # Delete the outdated duplicate vectors.
+            continue  # Skip indexing duplicate content.
         if current_metadata:  # Check whether an older version of this file is indexed.
             collection.delete(where={"source": path.name})  # Remove the older chunks before replacing them.
         chunks = split_text(text)  # Split the new or changed document into chunks.
@@ -71,7 +95,11 @@ def build_index(reset: bool = False) -> tuple[int, int]:  # Build or incremental
             model = SentenceTransformer(EMBEDDING_MODEL)  # Load the embedding model.
         ids = [f"{path.name}-{number}" for number in range(len(chunks))]  # Create stable IDs for the chunks.
         metadatas = [  # Create metadata for each chunk.
-            {"source": path.name, "chunk": number + 1, "file_hash": file_hash}  # Store source, position, and content hash.
+            {  # Store source, position, content hash, and index compatibility metadata.
+                "source": path.name,  # Store the source filename.
+                "chunk": number + 1,  # Store the one-based chunk number.
+                **expected_metadata,  # Store the file and index version metadata.
+            }  # Finish the chunk metadata record.
             for number in range(len(chunks))  # Iterate through chunk positions.
         ]  # Finish creating metadata.
         embeddings = model.encode(chunks, normalize_embeddings=True).tolist()  # Convert chunks into vectors.

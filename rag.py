@@ -5,7 +5,7 @@ import chromadb  # 导入 ChromaDB，用于搜索相关文档片段。
 from openai import OpenAI  # 导入 OpenAI 兼容客户端，用于调用 DeepSeek。
 from sentence_transformers import SentenceTransformer  # 导入文本向量模型。
 
-from config import CHROMA_DIR, COLLECTION_NAME, DEEPSEEK_API_KEY, DEEPSEEK_MODEL  # 导入配置项。
+from config import CHROMA_DIR, COLLECTION_NAME, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, RETRIEVAL_DISTANCE_THRESHOLD  # Import configuration values.
 from ingest import EMBEDDING_MODEL  # 复用建立索引时使用的向量模型名称。
 
 SYSTEM_PROMPT = """You are a company knowledge assistant.
@@ -127,6 +127,14 @@ class RAG:
         docs = result.get("documents", [[]])[0]  # 获取检索到的文本内容。
         metas = result.get("metadatas", [[]])[0]  # 获取检索结果的来源信息。
         distances = result.get("distances", [[]])[0]  # 获取每个片段与问题的距离。
+        relevant_items = [  # Keep only results within the configured relevance threshold.
+            (doc, meta, distance)  # Preserve the document, metadata, and distance.
+            for doc, meta, distance in zip(docs, metas, distances)  # Iterate over retrieved results.
+            if distance <= RETRIEVAL_DISTANCE_THRESHOLD  # Reject weakly related results.
+        ]  # Finish relevance filtering.
+        docs = [item[0] for item in relevant_items]  # Keep relevant document text only.
+        metas = [item[1] for item in relevant_items]  # Keep relevant metadata only.
+        distances = [item[2] for item in relevant_items]  # Keep relevant distances only.
         references = [  # 组合成网页需要展示的参考资料列表。
             {**meta, "text": doc, "distance": distance}  # 保存来源、原文和相似度距离。
             for doc, meta, distance in zip(docs, metas, distances)  # 同时遍历文本、来源和距离。

@@ -1,8 +1,27 @@
 import streamlit as st  # 导入 Streamlit，用于创建网页界面。
 
-from config import DATA_DIR, DEEPSEEK_API_KEY  # 导入文档目录和 API Key 配置。
+from config import APP_PASSWORD, DATA_DIR, DEEPSEEK_API_KEY  # Import the document directory and authentication settings.
 from ingest import build_index  # 导入重新建立文档索引的函数。
 from rag import RAG  # 导入 RAG 问答类。
+
+
+@st.cache_resource  # Cache heavyweight resources for the lifetime of the Streamlit process.
+def get_rag() -> RAG:  # Create one shared RAG instance instead of loading the model per question.
+    return RAG()  # Load the embedding model and vector-store connection once.
+
+
+def require_password() -> None:  # Protect the app when an application password is configured.
+    if not APP_PASSWORD or st.session_state.get("authenticated"):  # Allow local development without a password.
+        return  # Continue to the application.
+    password = st.text_input("Application password", type="password")  # Ask for the configured password.
+    if password == APP_PASSWORD:  # Check the submitted password.
+        st.session_state.authenticated = True  # Mark this browser session as authenticated.
+        st.rerun()  # Reload the page after successful authentication.
+    st.info("Enter the application password to continue.")  # Explain why the app is waiting.
+    st.stop()  # Do not render the knowledge assistant before authentication.
+
+
+require_password()  # Apply the optional password gate.
 
 st.set_page_config(page_title="Company Knowledge Assistant", page_icon="📚")  # Set the page title and icon.
 st.title("📚 Company Knowledge Assistant")  # Display the main page title.
@@ -41,7 +60,7 @@ if question:  # Continue only after the user submits a question.
         st.markdown(question)  # Display the user question.
     with st.chat_message("assistant"):  # Create the assistant message bubble.
         try:  # Try to run retrieval and answer generation.
-            rag = RAG()  # Create the RAG object for this turn.
+            rag = get_rag()  # Reuse the cached RAG object for this turn.
             history = st.session_state.messages[:-1]  # Get all messages before the current question.
             raw_history_start = st.session_state.summarized_count  # Get the first message not yet summarized.
             if len(history) - raw_history_start > 6:  # Check whether older messages need summarization.

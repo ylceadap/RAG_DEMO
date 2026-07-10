@@ -13,6 +13,7 @@ mindmap
       Conversation summary
       Clear conversation
       Source snippets
+      Optional password gate
     Document ingestion
       TXT
       Markdown
@@ -25,7 +26,7 @@ mindmap
     Incremental indexing
       ChromaDB persistent collection
       Sentence Transformers
-      BAAI/bge-small-zh-v1.5
+      BAAI/bge-small-en-v1.5
       SHA-256 file hash
         New file: add vectors
         Changed file: replace vectors
@@ -45,6 +46,7 @@ mindmap
       Embed contextual query
       ChromaDB similarity search
       Top 4 chunks
+      Distance threshold
       Source metadata
       Retrieval distance
     Answer generation
@@ -98,13 +100,15 @@ flowchart TD
 | 3. Read documents | `ingest.py` | `pathlib`, `pypdf` | Extract text from supported files | Scanned PDFs may require OCR, which is not implemented yet |
 | 4. Split text | `split_text()` | Python string processing | Create retrieval-sized chunks | Current settings are 700 characters with 100-character overlap |
 | 5. Detect file changes | `build_index()` | SHA-256 | Avoid re-embedding unchanged files | A changed file replaces all of its previous chunks |
-| 6. Create embeddings | `ingest.py`, `rag.py` | Sentence Transformers, `BAAI/bge-small-zh-v1.5` | Convert text and questions into vectors | The model is downloaded on first use and must be available locally |
+| 6. Create embeddings | `ingest.py`, `rag.py` | Sentence Transformers, `BAAI/bge-small-en-v1.5` | Convert text and questions into vectors | The model is downloaded on first use and must be available locally |
 | 7. Store vectors | `chroma_db/` | ChromaDB | Persist embeddings, text, and source metadata | The local database is ignored by Git and must be rebuilt on another machine |
-| 8. Retrieve context | `rag.py` | ChromaDB similarity search | Find the four closest chunks | Similarity distance is a signal, not proof that a result is relevant |
+| 8. Retrieve context | `rag.py` | ChromaDB similarity search and distance threshold | Find relevant chunks and reject weak matches | The threshold should be calibrated with the evaluation set |
 | 9. Manage memory | `app.py`, `rag.py` | Streamlit session state, DeepSeek summaries | Keep recent turns and summarize older turns | Memory currently lasts only for the active browser session |
 | 10. Generate answer | `rag.py` | DeepSeek API through the OpenAI-compatible client | Answer using the question, memory, and references | Company-specific answers must stay grounded in the documents |
 | 11. Display evidence | `app.py` | Streamlit expander | Show source file, chunk number, distance, and text | Users should verify important answers against the source |
-| 12. Sync new files | `python ingest.py` or **Sync document index** | Incremental indexer | Add, update, skip, or remove vectors as needed | Use `python ingest.py --reset` only for a deliberate full rebuild |
+| 12. Sync new files | `python ingest.py` or **Sync document index** | Incremental indexer with content and schema metadata | Add, update, skip, or remove vectors as needed | Use `python ingest.py --reset` only for a deliberate full rebuild |
+| 13. Protect the app | `.env`, `app.py` | Optional password gate | Restrict casual access to a local or private deployment | Use an identity provider for production authentication |
+| 14. Deploy | `Dockerfile` | Docker, Streamlit, Tesseract, Poppler | Package the app and scanned-PDF OCR dependencies | Keep secrets outside the image and configure persistent storage |
 
 ## Common Operations
 
@@ -118,6 +122,12 @@ python ingest.py
 
 # Force a complete rebuild
 python ingest.py --reset
+
+# Run core tests
+python -m unittest discover -s tests -p 'test_*.py'
+
+# Evaluate retrieval against the sample question set
+python tests/evaluate_retrieval.py
 
 # Start the application
 streamlit run app.py

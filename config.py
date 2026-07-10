@@ -12,3 +12,5 @@ load_dotenv(BASE_DIR / ".env")  # 从项目根目录加载 API 配置。
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")  # Read the DeepSeek API key.
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")  # Read the model name or use the default model.
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")  # Read the optional application password.
+RETRIEVAL_DISTANCE_THRESHOLD = float(os.getenv("RETRIEVAL_DISTANCE_THRESHOLD", "0.75"))  # Set the maximum accepted cosine distance.

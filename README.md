@@ -43,6 +43,19 @@ For a full rebuild, run:
 python ingest.py --reset
 ```
 
+## Optional password protection
+
+Set `APP_PASSWORD` in `.env` to enable a basic password gate for the Streamlit session. Leave it empty for local development. This is a lightweight guard, not a replacement for production identity and access management.
+
+## Docker deployment
+
+```bash
+docker build -t company-knowledge-assistant .
+docker run --rm -p 8501:8501 --env-file .env company-knowledge-assistant
+```
+
+The Docker image includes Tesseract and Poppler for scanned-PDF OCR. Keep API keys in environment variables and do not bake them into the image.
+
 ## Example questions
 
 - What are the onboarding steps for a new employee?

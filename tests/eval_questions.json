@@ -1,0 +1,22 @@
+[
+  {
+    "question": "What are the onboarding steps for a new employee?",
+    "expected_sources": ["employee-handbook.md"]
+  },
+  {
+    "question": "When are work accounts usually activated after onboarding materials are submitted?",
+    "expected_sources": ["employee-handbook.md"]
+  },
+  {
+    "question": "What is the daily meal allowance during business travel?",
+    "expected_sources": ["expense-policy.txt"]
+  },
+  {
+    "question": "Which materials are required for an expense claim?",
+    "expected_sources": ["expense-policy.txt"]
+  },
+  {
+    "question": "Does the company provide remote work?",
+    "expected_sources": []
+  }
+]
