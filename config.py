@@ -10,5 +10,5 @@ COLLECTION_NAME = "company_documents"  # 设置向量集合的名称。
 
 load_dotenv(BASE_DIR / ".env")  # 从项目根目录加载 API 配置。
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")  # 读取 DeepSeek API Key。
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")  # 读取模型名，没有配置时使用默认模型。
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")  # Read the DeepSeek API key.
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")  # Read the model name or use the default model.

@@ -8,17 +8,17 @@ from sentence_transformers import SentenceTransformer  # 导入文本向量模�
 from config import CHROMA_DIR, COLLECTION_NAME, DEEPSEEK_API_KEY, DEEPSEEK_MODEL  # 导入配置项。
 from ingest import EMBEDDING_MODEL  # 复用建立索引时使用的向量模型名称。
 
-SYSTEM_PROMPT = """你是一个公司资料问答助手。
-对于公司制度、员工手册和产品资料问题，必须严格根据参考资料回答，不要凭空编造。
-如果参考资料与问题无关，但问题属于简单数学、常识或一般闲聊，可以直接回答。
-如果是公司资料类问题且参考资料中没有答案，请明确说“资料中没有找到相关信息”。
-回答尽量简洁；使用参考资料时，在最后列出使用的来源文件。
+SYSTEM_PROMPT = """You are a company knowledge assistant.
+For company policies, employee handbook, and product questions, answer strictly from the reference material and do not invent facts.
+If the reference material is unrelated but the question is simple math, general knowledge, or casual conversation, answer directly.
+If the question is company-specific and the reference material has no answer, say "No relevant information was found in the documents."
+Keep answers concise and list the source files when reference material is used.
 """
 
-SUMMARY_PROMPT = """你负责整理一段公司资料问答对话的长期记忆。
-请保留已经确认的事实、用户关心的主题、上下文指代和未解决的问题。
-删除寒暄、重复内容和无关细节，不要添加对话中没有出现的信息。
-请用简洁的中文输出摘要。"""  # 设置对话摘要生成规则。
+SUMMARY_PROMPT = """You summarize a company knowledge assistant conversation for long-term memory.
+Keep confirmed facts, topics of interest, references, and unresolved questions.
+Remove greetings, repetition, and irrelevant details. Do not add information that was not discussed.
+Write a concise English summary."""  # Set the summary-generation rules.
 
 ALLOWED_OPERATORS = {  # 设置允许执行的数学运算。
     ast.Add: operator.add,  # 允许加法。
@@ -44,28 +44,32 @@ def calculate_math(expression: str) -> int | float:  # 安全计算简单数学�
             left = evaluate(node.left)  # 计算左侧数字。
             right = evaluate(node.right)  # 计算右侧数字。
             return ALLOWED_OPERATORS[type(node.op)](left, right)  # 执行数学运算。
-        raise ValueError("只支持简单数学表达式")  # 拒绝函数、变量等不安全内容。
+        raise ValueError("Only simple mathematical expressions are supported")  # Reject unsafe functions and variables.
 
     result = evaluate(tree)  # 计算完整表达式。
     if abs(result) > 10**12:  # 限制结果大小，避免异常计算。
-        raise ValueError("数学结果超出支持范围")  # 拒绝过大的结果。
+        raise ValueError("The mathematical result is outside the supported range")  # Reject excessively large results.
     return result  # 返回数学结果。
 
 
 def extract_math_expression(question: str) -> str | None:  # 从问题中提取简单数学表达式。
-    cleaned = question.strip().replace("？", "").replace("?", "")  # 清理问题两端空格和问号。
-    for suffix in ("等于多少", "是多少", "等于几", "等于") :  # 遍历常见数学提问后缀。
+    cleaned = question.strip().replace("?", "")  # Remove surrounding spaces and question marks.
+    for prefix in ("what is ", "calculate ", "compute "):  # Check common English math-question prefixes.
+        if cleaned.lower().startswith(prefix):  # Detect a recognized prefix.
+            cleaned = cleaned[len(prefix):].strip()  # Remove the question prefix.
+            break  # Stop after finding a prefix.
+    for suffix in (" equals", " equal to"):  # Check common English math-question suffixes.
         if cleaned.endswith(suffix):  # 判断问题是否以数学后缀结尾。
-            cleaned = cleaned[: -len(suffix)].strip()  # 删除数学提问后缀。
-            break  # 找到后缀后停止遍历。
-    allowed = set("0123456789+-*/(). ")  # 设置允许出现在表达式中的字符。
-    return cleaned if cleaned and set(cleaned) <= allowed else None  # 只返回纯数学表达式。
+            cleaned = cleaned[: -len(suffix)].strip()  # Remove the question suffix.
+            break  # Stop after finding a suffix.
+    allowed = set("0123456789+-*/(). ")  # Define allowed expression characters.
+    return cleaned if cleaned and set(cleaned) <= allowed else None  # Return only a pure math expression.
 
 
 class RAG:
     def __init__(self):  # 初始化 RAG 问答对象。
         if not DEEPSEEK_API_KEY:  # 判断是否配置了 DeepSeek API Key。
-            raise ValueError("请先在 .env 文件中配置 DEEPSEEK_API_KEY")  # 没有配置时给出提示。
+            raise ValueError("Configure DEEPSEEK_API_KEY in the .env file first")  # Explain the missing configuration.
         self.embedder = SentenceTransformer(EMBEDDING_MODEL)  # 加载与索引相同的向量模型。
         client = chromadb.PersistentClient(path=str(CHROMA_DIR))  # 连接本地向量数据库。
         self.collection = client.get_or_create_collection(COLLECTION_NAME)  # 获取文档向量集合。
@@ -113,7 +117,7 @@ class RAG:
             f"{message['role']}: {message['content']}"  # 标记消息角色和内容。
             for message in recent_history  # 遍历最近的历史消息。
         )  # 完成历史消息拼接。
-        retrieval_query = f"长期记忆:\n{summary}\n\n对话历史:\n{history_text}\n\n当前问题:\n{question}"  # 将摘要、上下文和当前问题合并用于检索。
+        retrieval_query = f"Long-term memory:\n{summary}\n\nConversation history:\n{history_text}\n\nCurrent question:\n{question}"  # Combine context for retrieval.
         query_embedding = self.embedder.encode([retrieval_query], normalize_embeddings=True).tolist()  # 将带上下文的问题转换为向量。
         result = self.collection.query(  # 搜索最相关的文本片段。
             query_embeddings=query_embedding,  # 使用问题向量进行检索。
@@ -128,7 +132,7 @@ class RAG:
             for doc, meta, distance in zip(docs, metas, distances)  # 同时遍历文本、来源和距离。
         ]  # 完成参考资料列表。
         context = "\n\n".join(  # 将多个文本片段拼接成参考资料。
-            f"[来源: {meta['source']}，第 {meta['chunk']} 个片段]\n{doc}"  # 给每段资料标记来源。
+            f"[Source: {meta['source']}, chunk {meta['chunk']}]\n{doc}"  # Label each document chunk.
             for doc, meta in zip(docs, metas)  # 同时遍历文本和对应的元数据。
         )  # 完成参考资料拼接。
         messages = [  # 创建发送给模型的消息列表。
@@ -136,7 +140,7 @@ class RAG:
         ]  # 先放入系统规则。
         messages.extend(recent_history)  # 加入最近几轮历史对话。
         messages.append(  # 加入当前问题和检索资料。
-            {"role": "user", "content": f"长期记忆:\n{summary}\n\n参考资料:\n{context}\n\n当前问题: {question}"}  # 发送记忆、资料和当前问题。
+            {"role": "user", "content": f"Long-term memory:\n{summary}\n\nReference material:\n{context}\n\nCurrent question: {question}"}  # Send memory, references, and the current question.
         )  # 完成当前问题消息。
         response = self.llm.chat.completions.create(  # 调用 DeepSeek 对话接口。
             model=DEEPSEEK_MODEL,  # 指定使用的模型。

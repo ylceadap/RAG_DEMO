@@ -4,24 +4,24 @@ from config import DATA_DIR, DEEPSEEK_API_KEY  # 导入文档目录和 API Key �
 from ingest import build_index  # 导入重新建立文档索引的函数。
 from rag import RAG  # 导入 RAG 问答类。
 
-st.set_page_config(page_title="公司资料问答助手", page_icon="📚")  # 设置网页标题和图标。
-st.title("📚 公司资料问答助手")  # 显示网页主标题。
-st.caption("基于本地文档检索 + DeepSeek API")  # 显示网页说明文字。
+st.set_page_config(page_title="Company Knowledge Assistant", page_icon="📚")  # Set the page title and icon.
+st.title("📚 Company Knowledge Assistant")  # Display the main page title.
+st.caption("Local document retrieval powered by the DeepSeek API")  # Display the page description.
 
 with st.sidebar:  # 创建左侧边栏区域。
-    st.subheader("使用说明")  # 显示边栏小标题。
-    st.write(f"把 .txt、.md 或 .pdf 文件放入：\n`{DATA_DIR}`")  # 告诉用户文档放置位置。
-    if st.button("清空当前对话"):  # 创建清空聊天记录按钮。
-        st.session_state.messages = []  # 删除当前网页会话中的所有聊天记录。
-        st.session_state.conversation_summary = ""  # 删除当前会话的长期记忆摘要。
-        st.session_state.summarized_count = 0  # 重置已摘要消息计数。
-        st.rerun()  # 立即刷新页面，让界面显示为空白对话。
-    if st.button("重新导入文档"):  # 创建重新导入文档按钮。
-        with st.spinner("正在切分文档并建立索引，首次运行会下载 Embedding 模型..."):  # 显示处理中的提示。
-            files, chunks = build_index()  # 读取文档并建立向量索引。
-        st.success(f"已导入 {files} 个文件，生成 {chunks} 个文本片段")  # 显示索引完成结果。
-    if not DEEPSEEK_API_KEY:  # 判断是否缺少 API Key。
-        st.warning("尚未配置 DEEPSEEK_API_KEY")  # 在网页中显示配置警告。
+    st.subheader("Instructions")  # Display the sidebar heading.
+    st.write(f"Place .txt, .md, or .pdf files in:\n`{DATA_DIR}`")  # Show the document directory.
+    if st.button("Clear conversation"):  # Create the clear-history button.
+        st.session_state.messages = []  # Delete the current chat history.
+        st.session_state.conversation_summary = ""  # Delete the conversation summary.
+        st.session_state.summarized_count = 0  # Reset the summarized-message counter.
+        st.rerun()  # Refresh the page with an empty conversation.
+    if st.button("Rebuild document index"):  # Create the rebuild-index button.
+        with st.spinner("Splitting documents and building the index. The embedding model may download on first run..."):  # Show progress text.
+            files, chunks = build_index()  # Read documents and build the vector index.
+        st.success(f"Imported {files} files and created {chunks} text chunks")  # Show the indexing result.
+    if not DEEPSEEK_API_KEY:  # Check whether the API key is missing.
+        st.warning("DEEPSEEK_API_KEY is not configured")  # Display a configuration warning.
 
 if "messages" not in st.session_state:  # 判断当前会话是否已有聊天记录。
     st.session_state.messages = []  # 初始化聊天记录列表。
@@ -34,39 +34,39 @@ for message in st.session_state.messages:  # 遍历历史聊天记录。
     with st.chat_message(message["role"]):  # 按用户或助手身份显示消息。
         st.markdown(message["content"])  # 显示消息内容。
 
-question = st.chat_input("例如：新员工入职需要经过哪些步骤？")  # 显示用户输入框。
-if question:  # 只有用户输入问题后才继续处理。
-    st.session_state.messages.append({"role": "user", "content": question})  # 保存用户问题。
-    with st.chat_message("user"):  # 创建用户消息气泡。
-        st.markdown(question)  # 显示用户问题。
-    with st.chat_message("assistant"):  # 创建助手消息气泡。
-        try:  # 尝试执行检索和问答。
-            rag = RAG()  # 创建本轮问答使用的 RAG 对象。
-            history = st.session_state.messages[:-1]  # 获取当前问题之前的全部历史消息。
-            raw_history_start = st.session_state.summarized_count  # 获取尚未纳入摘要的消息起点。
-            if len(history) - raw_history_start > 6:  # 判断是否有超过三轮的旧对话需要摘要。
-                summary_end = len(history) - 6  # 保留最近六条消息作为原始上下文。
-                messages_to_summarize = history[raw_history_start:summary_end]  # 取出需要压缩的旧消息。
-                st.session_state.conversation_summary = rag.summarize_history(  # 更新长期记忆摘要。
-                    messages_to_summarize,  # 传入本次新增的旧消息。
-                    st.session_state.conversation_summary,  # 传入已有摘要作为基础。
-                )  # 完成摘要更新。
-                st.session_state.summarized_count = summary_end  # 记录已经摘要到哪条消息。
-            answer, sources = rag.answer(  # 检索资料并生成结合摘要和历史的回答。
-                question,  # 传入当前用户问题。
-                history=history[-6:],  # 传入最近三轮原始对话。
-                summary=st.session_state.conversation_summary,  # 传入更早对话的摘要。
-            )  # 完成多轮问答调用。
-            st.markdown(answer)  # 显示助手回答。
-            if sources:  # 判断是否检索到了来源。
-                st.caption("检索到的来源：" + "、".join(sorted({s["source"] for s in sources})))  # 显示来源文件名。
-                with st.expander("查看参考资料"):  # 创建可展开的参考资料区域。
-                    for number, source in enumerate(sources, start=1):  # 遍历所有检索结果。
-                        st.markdown(  # 显示参考资料的来源和检索距离。
-                            f"**参考片段 {number}：{source['source']} · 第 {source['chunk']} 个片段**  "
-                            f"\n检索距离：`{source['distance']:.4f}`"
-                        )  # 结束来源信息展示。
-                        st.code(source["text"], language="text")  # 展示模型实际使用的原文。
-            st.session_state.messages.append({"role": "assistant", "content": answer})  # 保存助手回答。
-        except Exception as exc:  # 捕获运行过程中的异常。
-            st.error(str(exc))  # 在网页中显示错误信息。
+question = st.chat_input("For example: What are the onboarding steps for a new employee?")  # Show the user input box.
+if question:  # Continue only after the user submits a question.
+    st.session_state.messages.append({"role": "user", "content": question})  # Save the user question.
+    with st.chat_message("user"):  # Create the user message bubble.
+        st.markdown(question)  # Display the user question.
+    with st.chat_message("assistant"):  # Create the assistant message bubble.
+        try:  # Try to run retrieval and answer generation.
+            rag = RAG()  # Create the RAG object for this turn.
+            history = st.session_state.messages[:-1]  # Get all messages before the current question.
+            raw_history_start = st.session_state.summarized_count  # Get the first message not yet summarized.
+            if len(history) - raw_history_start > 6:  # Check whether older messages need summarization.
+                summary_end = len(history) - 6  # Keep the latest six messages as raw context.
+                messages_to_summarize = history[raw_history_start:summary_end]  # Select messages to compress.
+                st.session_state.conversation_summary = rag.summarize_history(  # Update the long-term summary.
+                    messages_to_summarize,  # Pass the newly eligible older messages.
+                    st.session_state.conversation_summary,  # Pass the existing summary as context.
+                )  # Finish updating the summary.
+                st.session_state.summarized_count = summary_end  # Record the summarized-message boundary.
+            answer, sources = rag.answer(  # Retrieve documents and generate a context-aware answer.
+                question,  # Pass the current user question.
+                history=history[-6:],  # Pass the latest three raw conversation turns.
+                summary=st.session_state.conversation_summary,  # Pass the summary of older messages.
+            )  # Complete the conversational RAG call.
+            st.markdown(answer)  # Display the assistant answer.
+            if sources:  # Check whether sources were retrieved.
+                st.caption("Sources: " + ", ".join(sorted({s["source"] for s in sources})))  # Display source filenames.
+                with st.expander("View reference material"):  # Create an expandable references section.
+                    for number, source in enumerate(sources, start=1):  # Iterate over retrieved sources.
+                        st.markdown(  # Display the source and retrieval distance.
+                            f"**Reference {number}: {source['source']} · chunk {source['chunk']}**  "
+                            f"\nDistance: `{source['distance']:.4f}`"
+                        )  # Finish displaying source metadata.
+                        st.code(source["text"], language="text")  # Display the source text used by the model.
+            st.session_state.messages.append({"role": "assistant", "content": answer})  # Save the assistant answer.
+        except Exception as exc:  # Catch errors during processing.
+            st.error(str(exc))  # Display the error in the web app.

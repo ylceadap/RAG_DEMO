@@ -6,9 +6,9 @@ from sentence_transformers import SentenceTransformer  # 导入文本向量模�
 
 from config import CHROMA_DIR, COLLECTION_NAME, DATA_DIR  # 导入项目路径和集合配置。
 
-EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # 指定中文 Embedding 模型。
-CHUNK_SIZE = 700  # 设置每个文本片段的最大字符数。
-CHUNK_OVERLAP = 100  # 设置相邻文本片段之间重叠的字符数。
+EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # Use the embedding model configured for the corpus.
+CHUNK_SIZE = 700  # Set the maximum size of each text chunk.
+CHUNK_OVERLAP = 100  # Set the overlap between neighboring chunks.
 
 
 def read_file(path: Path) -> str:  # 定义读取单个文件的函数。
@@ -58,4 +58,4 @@ def build_index() -> tuple[int, int]:  # 定义建立向量索引的函数。
 
 if __name__ == "__main__":  # 判断当前文件是否被直接运行。
     files, chunks = build_index()  # 建立索引并接收统计结果。
-    print(f"已导入 {files} 个文件，生成 {chunks} 个文本块。")  # 输出索引结果。
+    print(f"Imported {files} files and created {chunks} text chunks.")  # Print the indexing result.
