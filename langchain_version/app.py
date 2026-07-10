@@ -33,9 +33,15 @@ with st.sidebar:
     st.write(f"Place .txt, .md, or .pdf files in:\n`{DATA_DIR}`")
     if st.button("Clear conversation"):
         st.session_state.messages = []
+        st.session_state.conversation_summary = ""
+        st.session_state.summarized_count = 0
         st.rerun()
-    if st.button("Rebuild document index"):
-        with st.spinner("Loading documents and rebuilding the LangChain index..."):
+    if st.button("Sync document index"):
+        with st.spinner("Checking documents and updating the LangChain index..."):
+            files, chunks = build_index()
+        st.success(f"Updated {files} files and added {chunks} chunks")
+    if st.button("Full rebuild index"):
+        with st.spinner("Rebuilding the complete LangChain index..."):
             files, chunks = build_index(reset=True)
         st.success(f"Indexed {files} files and created {chunks} chunks")
     if not DEEPSEEK_API_KEY:
@@ -43,6 +49,10 @@ with st.sidebar:
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "conversation_summary" not in st.session_state:
+    st.session_state.conversation_summary = ""
+if "summarized_count" not in st.session_state:
+    st.session_state.summarized_count = 0
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -59,7 +69,21 @@ if question:
                 HumanMessage(content=message["content"]) if message["role"] == "user" else AIMessage(content=message["content"])
                 for message in st.session_state.messages[:-1]
             ]
-            answer, sources = get_rag().answer(question, history=history)
+            rag = get_rag()
+            raw_history_start = st.session_state.summarized_count
+            if len(history) - raw_history_start > 6:
+                summary_end = len(history) - 6
+                old_messages = history[raw_history_start:summary_end]
+                st.session_state.conversation_summary = rag.summarize_history(
+                    old_messages,
+                    st.session_state.conversation_summary,
+                )
+                st.session_state.summarized_count = summary_end
+            answer, sources = rag.answer(
+                question,
+                history=history[-6:],
+                summary=st.session_state.conversation_summary,
+            )
             st.markdown(answer)
             if sources:
                 st.caption("Sources: " + ", ".join(sorted({source["source"] for source in sources})))
