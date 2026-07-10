@@ -1,6 +1,10 @@
 .env
+**/.env
 .venv/
+**/.venv/
 __pycache__/
+**/__pycache__/
 chroma_db/
-.streamlit/
-.env.example
+**/chroma_db/
+.streamlit/secrets.toml
+**/.streamlit/secrets.toml

@@ -8,7 +8,8 @@ DATA_DIR = BASE_DIR / "data" / "documents"  # 设置原始文档所在目录。
 CHROMA_DIR = BASE_DIR / "chroma_db"  # 设置 ChromaDB 向量数据库目录。
 COLLECTION_NAME = "company_documents"  # 设置向量集合的名称。
 
-load_dotenv(BASE_DIR / ".env")  # 从项目根目录加载 API 配置。
+load_dotenv(BASE_DIR / ".env")  # Load a version-local environment file when present.
+load_dotenv(BASE_DIR.parent / ".env")  # Fall back to the project-level environment file.
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")  # Read the DeepSeek API key.
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")  # Read the model name or use the default model.
