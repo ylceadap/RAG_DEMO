@@ -14,7 +14,7 @@ cp .env.example .env
 
 The implementation uses LangChain document loading, `RecursiveCharacterTextSplitter`, `HuggingFaceEmbeddings`, `Chroma`, `ChatPromptTemplate`, and the OpenAI-compatible DeepSeek chat model.
 
-This version now supports incremental indexing, OCR fallback, duplicate-file detection, index metadata, relevance thresholds, simple math handling, recent-history plus summary memory, source snippets, and optional password protection.
+This version now supports incremental indexing, OCR fallback, duplicate-file detection, index metadata, relevance thresholds, recent-history plus summary memory, source snippets, and optional password protection.
 
 ## Tests
 

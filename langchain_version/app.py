@@ -1,96 +1,150 @@
-import streamlit as st  # Build the interactive web interface.
-from langchain_core.messages import AIMessage, HumanMessage  # Convert session messages to LangChain messages.
+import streamlit as st
+from langchain_core.messages import AIMessage, HumanMessage
 
-from config import APP_PASSWORD, DATA_DIR, DEEPSEEK_API_KEY  # Import UI and environment configuration.
-from ingest import build_index  # Import the incremental indexing function.
-from rag import LangChainRAG  # Import the LangChain RAG service.
+from config import APP_PASSWORD, DATA_DIR, DEEPSEEK_API_KEY
+from ingest import build_index
+from rag import LangChainRAG
 
-st.set_page_config(page_title="LangChain Knowledge Assistant", page_icon="📚")  # Configure the browser page.
+RECENT_MESSAGE_LIMIT = 6
 
-
-@st.cache_resource  # Cache heavyweight resources across Streamlit reruns.
-def get_rag() -> LangChainRAG:  # Create the shared LangChain RAG service.
-    return LangChainRAG()  # Load embeddings, Chroma, and the chat model once.
+st.set_page_config(page_title="LangChain Knowledge Assistant", page_icon="📚")
 
 
-def require_password() -> None:  # Gate the app when a password is configured.
-    if not APP_PASSWORD or st.session_state.get("authenticated"):  # Allow local development without a password.
-        return  # Continue rendering the application.
-    password = st.text_input("Application password", type="password")  # Ask the user for the password.
-    if password == APP_PASSWORD:  # Check the submitted password.
-        st.session_state.authenticated = True  # Mark this browser session as authenticated.
-        st.rerun()  # Reload the page after successful authentication.
-    st.info("Enter the application password to continue.")  # Explain why the app is waiting.
-    st.stop()  # Stop rendering protected content.
+@st.cache_resource
+def get_rag() -> LangChainRAG:
+    """Create one shared LangChain RAG service for the Streamlit process."""
+    return LangChainRAG()
 
 
-require_password()  # Apply the optional password gate.
-st.title("📚 LangChain Knowledge Assistant")  # Display the application title.
-st.caption("LangChain loaders, embeddings, Chroma retrieval, and DeepSeek generation")  # Explain the stack.
+def initialize_session_state() -> None:
+    """Create the conversation state used by this browser session."""
+    st.session_state.setdefault("messages", [])
+    st.session_state.setdefault("conversation_summary", "")
+    st.session_state.setdefault("summarized_count", 0)
 
-with st.sidebar:  # Build the controls in the sidebar.
-    st.subheader("Instructions")  # Display the sidebar heading.
-    st.write(f"Place .txt, .md, or .pdf files in:\n`{DATA_DIR}`")  # Show the document directory.
-    if st.button("Clear conversation"):  # Create the conversation reset button.
-        st.session_state.messages = []  # Delete visible chat messages.
-        st.session_state.conversation_summary = ""  # Delete the long-term summary.
-        st.session_state.summarized_count = 0  # Reset the summary boundary.
-        st.rerun()  # Refresh the page with an empty session.
-    if st.button("Sync document index"):  # Create the incremental indexing button.
-        with st.spinner("Checking documents and updating the LangChain index..."):  # Show indexing progress.
-            files, chunks = build_index()  # Add, update, skip, or remove document vectors.
-        st.success(f"Updated {files} files and added {chunks} chunks")  # Display indexing statistics.
-    if st.button("Full rebuild index"):  # Create the full rebuild button.
-        with st.spinner("Rebuilding the complete LangChain index..."):  # Show full rebuild progress.
-            files, chunks = build_index(reset=True)  # Delete and recreate the entire index.
-        st.success(f"Indexed {files} files and created {chunks} chunks")  # Display rebuild statistics.
-    if not DEEPSEEK_API_KEY:  # Check whether the API key is configured.
-        st.warning("DEEPSEEK_API_KEY is not configured")  # Display a configuration warning.
 
-if "messages" not in st.session_state:  # Initialize visible conversation state.
-    st.session_state.messages = []  # Store user and assistant messages.
-if "conversation_summary" not in st.session_state:  # Initialize long-term conversation memory.
-    st.session_state.conversation_summary = ""  # Store the summary of older turns.
-if "summarized_count" not in st.session_state:  # Initialize the summary boundary.
-    st.session_state.summarized_count = 0  # Track how many messages were summarized.
+def clear_conversation() -> None:
+    """Reset the visible history and its long-term summary."""
+    st.session_state.messages = []
+    st.session_state.conversation_summary = ""
+    st.session_state.summarized_count = 0
 
-for message in st.session_state.messages:  # Replay the conversation on every rerun.
-    with st.chat_message(message["role"]):  # Select the user or assistant message style.
-        st.markdown(message["content"])  # Render the message content.
 
-question = st.chat_input("Ask a question about the company documents")  # Render the user input box.
-if question:  # Process only when the user submits a question.
-    st.session_state.messages.append({"role": "user", "content": question})  # Save the current question.
-    with st.chat_message("user"):  # Render the user message bubble.
-        st.markdown(question)  # Display the user question.
-    with st.chat_message("assistant"):  # Render the assistant response bubble.
-        try:  # Protect the UI from runtime errors.
-            history = [  # Convert stored dictionaries into LangChain message objects.
-                HumanMessage(content=message["content"]) if message["role"] == "user" else AIMessage(content=message["content"])  # Map each role.
-                for message in st.session_state.messages[:-1]  # Exclude the current question from prior history.
-            ]  # Finish converting chat history.
-            rag = get_rag()  # Reuse the cached RAG service.
-            raw_history_start = st.session_state.summarized_count  # Find the first unsummarized message.
-            if len(history) - raw_history_start > 6:  # Summarize older messages after three turns.
-                summary_end = len(history) - 6  # Keep the latest six messages raw.
-                old_messages = history[raw_history_start:summary_end]  # Select messages to summarize.
-                st.session_state.conversation_summary = rag.summarize_history(  # Generate the new summary.
-                    old_messages,  # Pass newly eligible older messages.
-                    st.session_state.conversation_summary,  # Preserve the previous summary.
-                )  # Finish summary generation.
-                st.session_state.summarized_count = summary_end  # Save the new summary boundary.
-            answer, sources = rag.answer(  # Retrieve context and generate an answer.
-                question,  # Pass the current question.
-                history=history[-6:],  # Pass the latest three raw turns.
-                summary=st.session_state.conversation_summary,  # Pass older conversation memory.
-            )  # Finish the RAG call.
-            st.markdown(answer)  # Display the answer text.
-            if sources:  # Check whether relevant references were found.
-                st.caption("Sources: " + ", ".join(sorted({source["source"] for source in sources})))  # Display source names.
-                with st.expander("View reference material"):  # Create an expandable evidence section.
-                    for number, source in enumerate(sources, start=1):  # Iterate through source chunks.
-                        st.markdown(f"**Reference {number}: {source['source']}**  \nDistance: `{source['distance']:.4f}`")  # Show source metadata.
-                        st.code(source["text"], language="text")  # Show the retrieved source text.
-            st.session_state.messages.append({"role": "assistant", "content": answer})  # Save the assistant answer.
-        except Exception as exc:  # Catch errors from indexing, retrieval, or the API.
-            st.error(str(exc))  # Show the error to the user.
+def require_password() -> None:
+    """Stop rendering when a configured application password is missing."""
+    if not APP_PASSWORD or st.session_state.get("authenticated"):
+        return
+
+    password = st.text_input("Application password", type="password")
+    if password == APP_PASSWORD:
+        st.session_state.authenticated = True
+        st.rerun()
+
+    st.info("Enter the application password to continue.")
+    st.stop()
+
+
+def render_sidebar() -> None:
+    """Render conversation and indexing controls."""
+    with st.sidebar:
+        st.subheader("Instructions")
+        st.write(f"Place .txt, .md, or .pdf files in:\n`{DATA_DIR}`")
+
+        if st.button("Clear conversation"):
+            clear_conversation()
+            st.rerun()
+
+        if st.button("Sync document index"):
+            with st.spinner("Checking documents and updating the LangChain index..."):
+                files, chunks = build_index()
+            st.success(f"Updated {files} files and added {chunks} chunks")
+
+        if st.button("Full rebuild index"):
+            with st.spinner("Rebuilding the complete LangChain index..."):
+                files, chunks = build_index(reset=True)
+            st.success(f"Indexed {files} files and created {chunks} chunks")
+
+        if not DEEPSEEK_API_KEY:
+            st.warning("DEEPSEEK_API_KEY is not configured")
+
+
+def render_sources(sources: list[dict]) -> None:
+    """Display the retrieved chunks used to answer a question."""
+    if not sources:
+        return
+
+    source_names = sorted({source["source"] for source in sources})
+    st.caption("Sources: " + ", ".join(source_names))
+    with st.expander("View reference material"):
+        for number, source in enumerate(sources, start=1):
+            st.markdown(
+                f"**Reference {number}: {source['source']} · chunk {source['chunk']}**  "
+                f"\nDistance: `{source['distance']:.4f}`"
+            )
+            st.code(source["text"], language="text")
+
+
+def to_langchain_messages(messages: list[dict]) -> list[HumanMessage | AIMessage]:
+    """Convert Streamlit-friendly dictionaries into LangChain message objects."""
+    return [
+        HumanMessage(content=message["content"])
+        if message["role"] == "user"
+        else AIMessage(content=message["content"])
+        for message in messages
+    ]
+
+
+def update_conversation_summary(rag: LangChainRAG, history: list[HumanMessage | AIMessage]) -> None:
+    """Summarize older messages while retaining recent messages as raw context."""
+    first_unsummarized = st.session_state.summarized_count
+    summary_end = len(history) - RECENT_MESSAGE_LIMIT
+    if summary_end <= first_unsummarized:
+        return
+
+    st.session_state.conversation_summary = rag.summarize_history(
+        history[first_unsummarized:summary_end],
+        st.session_state.conversation_summary,
+    )
+    st.session_state.summarized_count = summary_end
+
+
+def answer_question(question: str) -> None:
+    """Show and save one RAG answer for the submitted question."""
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+        try:
+            rag = get_rag()
+            history = to_langchain_messages(st.session_state.messages[:-1])
+            update_conversation_summary(rag, history)
+            answer, sources = rag.answer(
+                question,
+                history=history[-RECENT_MESSAGE_LIMIT:],
+                summary=st.session_state.conversation_summary,
+            )
+            st.markdown(answer)
+            render_sources(sources)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+        except Exception as exc:
+            st.error(str(exc))
+
+
+def render_chat_history() -> None:
+    """Replay messages stored for the current browser session."""
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+
+initialize_session_state()
+require_password()
+render_sidebar()
+
+st.title("📚 LangChain Knowledge Assistant")
+st.caption("LangChain loaders, embeddings, Chroma retrieval, and DeepSeek generation")
+render_chat_history()
+
+if question := st.chat_input("Ask a question about the company documents"):
+    answer_question(question)

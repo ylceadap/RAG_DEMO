@@ -40,8 +40,6 @@ mindmap
         Latest 3 turns
       Older conversation summary
         DeepSeek summary generation
-      Simple math fast path
-        Local safe AST evaluation
     Retrieval
       Embed contextual query
       ChromaDB similarity search
@@ -79,15 +77,12 @@ flowchart TD
     F --> G[ChromaDB persistent index]
 
     H[User asks a question] --> I[Streamlit session state]
-    I --> J{Simple math?}
-    J -- Yes --> K[Safe local calculation]
-    J -- No --> L[Combine question and memory]
+    I --> L[Combine question and memory]
     L --> M[Create query embedding]
     M --> N[Retrieve top 4 chunks]
     N --> O[Send history, summary, and references to DeepSeek]
     O --> P[Answer with source snippets]
-    K --> Q[Display answer]
-    P --> Q
+    P --> Q[Display answer]
     Q --> I
 ```
 

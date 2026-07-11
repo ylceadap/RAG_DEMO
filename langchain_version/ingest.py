@@ -14,6 +14,7 @@ from config import CHROMA_DIR, COLLECTION_NAME, DATA_DIR, EMBEDDING_MODEL  # Imp
 CHUNK_SIZE = 700  # Set the maximum chunk size.
 CHUNK_OVERLAP = 100  # Preserve context between neighboring chunks.
 INDEX_VERSION = "2"  # Change this when the index metadata schema changes.
+SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}  # Define the file types that can be indexed.
 
 
 def read_document(path: Path) -> list[Document]:  # Load one file into LangChain Documents.
@@ -45,75 +46,109 @@ def get_embeddings() -> HuggingFaceEmbeddings:  # Create the LangChain embedding
     )  # Return the embedding adapter.
 
 
-def build_index(reset: bool = False) -> tuple[int, int]:  # Build or incrementally update the vector index.
-    DATA_DIR.mkdir(parents=True, exist_ok=True)  # Ensure the document directory exists.
-    if reset and CHROMA_DIR.exists():  # Check whether a full rebuild was requested.
-        shutil.rmtree(CHROMA_DIR)  # Delete the old LangChain vector database.
-
-    embeddings = get_embeddings()  # Load the embedding model used by the vector store.
-    vectorstore = Chroma(  # Create a persistent LangChain Chroma store.
+def open_vectorstore(reset: bool) -> Chroma:  # Open a persistent store, optionally replacing its on-disk data.
+    if reset and CHROMA_DIR.exists():
+        shutil.rmtree(CHROMA_DIR)
+    return Chroma(
         collection_name=COLLECTION_NAME,  # Use the LangChain-specific collection name.
         persist_directory=str(CHROMA_DIR),  # Persist vectors under this version's directory.
-        embedding_function=embeddings,  # Tell Chroma how to embed new documents.
-    )  # Finish creating the vector store.
-    paths = [  # Find all supported source files.
-        path  # Keep the current path.
-        for path in sorted(DATA_DIR.iterdir())  # Iterate through the document directory.
-        if path.suffix.lower() in {".txt", ".md", ".pdf"}  # Keep supported file formats only.
-    ]  # Finish collecting paths.
-    current_sources = {path.name for path in paths}  # Record files that still exist on disk.
-    existing = vectorstore.get(include=["metadatas"])  # Read metadata from indexed chunks.
-    existing_metadata = [meta for meta in existing.get("metadatas", []) if meta]  # Remove empty metadata records.
-    existing_sources = {meta.get("source") for meta in existing_metadata}  # Find indexed source filenames.
-    for stale_source in existing_sources - current_sources:  # Find files deleted from the source directory.
-        vectorstore.delete(where={"source": stale_source})  # Remove their old chunks.
+        embedding_function=get_embeddings(),  # Tell Chroma how to embed new documents.
+    )
 
-    splitter = RecursiveCharacterTextSplitter(  # Create LangChain's recursive text splitter.
-        chunk_size=CHUNK_SIZE,  # Set the target chunk size.
-        chunk_overlap=CHUNK_OVERLAP,  # Preserve overlap between chunks.
-        separators=["\n\n", "\n", " ", ""],  # Prefer paragraph, line, word, then character boundaries.
-    )  # Finish the splitter configuration.
+
+def get_document_paths() -> list[Path]:  # List source files in a stable order.
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return [
+        path
+        for path in sorted(DATA_DIR.iterdir())
+        if path.suffix.lower() in SUPPORTED_SUFFIXES
+    ]
+
+
+def get_metadata(vectorstore: Chroma, where: dict | None = None) -> list[dict]:  # Read non-empty metadata records.
+    records = vectorstore.get(where=where, include=["metadatas"]) if where else vectorstore.get(include=["metadatas"])
+    return [metadata for metadata in records.get("metadatas", []) if metadata]
+
+
+def delete_stale_sources(vectorstore: Chroma, paths: list[Path]) -> None:  # Remove vectors for files deleted from DATA_DIR.
+    current_sources = {path.name for path in paths}
+    indexed_sources = {metadata.get("source") for metadata in get_metadata(vectorstore)}
+    for source in indexed_sources - current_sources:
+        vectorstore.delete(where={"source": source})
+
+
+def create_index_metadata(content: str) -> dict:  # Describe the content and settings used to create an index.
+    return {
+        "file_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "index_version": INDEX_VERSION,
+        "embedding_model": EMBEDDING_MODEL,
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
+    }
+
+
+def is_current(metadata_records: list[dict], expected: dict) -> bool:  # Check whether every stored chunk matches current settings.
+    return bool(metadata_records) and all(
+        all(metadata.get(key) == value for key, value in expected.items())
+        for metadata in metadata_records
+    )
+
+
+def has_duplicate_source(vectorstore: Chroma, file_hash: str, source: str) -> bool:  # Check whether another file already has identical content.
+    duplicate_sources = {
+        metadata.get("source")
+        for metadata in get_metadata(vectorstore, where={"file_hash": file_hash})
+    }
+    return bool(duplicate_sources - {source})
+
+
+def get_text_splitter() -> RecursiveCharacterTextSplitter:  # Create the configured LangChain text splitter.
+    return RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", " ", ""],
+    )
+
+
+def write_file_chunks(vectorstore: Chroma, splitter: RecursiveCharacterTextSplitter, path: Path, documents: list[Document], metadata: dict) -> int:  # Split and save one file.
+    chunks = splitter.split_documents(documents)
+    if not chunks:
+        return 0
+    for chunk in chunks:
+        chunk.metadata.update(metadata)
+    ids = [f"{path.name}-{number}" for number in range(len(chunks))]
+    vectorstore.add_documents(chunks, ids=ids)
+    return len(chunks)
+
+
+def build_index(reset: bool = False) -> tuple[int, int]:  # Build or incrementally update the vector index.
+    vectorstore = open_vectorstore(reset)
+    paths = get_document_paths()
+    delete_stale_sources(vectorstore, paths)
+    splitter = get_text_splitter()
+
     changed_files = 0  # Count new or changed files.
     added_chunks = 0  # Count chunks written to Chroma.
-    for path in paths:  # Process each source file.
-        documents = read_document(path)  # Load the current file.
-        content = "\n".join(document.page_content for document in documents)  # Combine its text for hashing.
-        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()  # Create a stable content hash.
-        current_records = vectorstore.get(where={"source": path.name}, include=["metadatas"])  # Read this file's old records.
-        current_metadata = current_records.get("metadatas", [])  # Extract the old metadata.
-        expected = {  # Define metadata required for a compatible index.
-            "file_hash": file_hash,  # Match the current file content.
-            "index_version": INDEX_VERSION,  # Match the current index schema.
-            "embedding_model": EMBEDDING_MODEL,  # Match the current embedding model.
-            "chunk_size": CHUNK_SIZE,  # Match the current chunk size.
-            "chunk_overlap": CHUNK_OVERLAP,  # Match the current overlap.
-        }  # Finish the compatibility metadata.
-        if current_metadata and all(  # Check whether every existing chunk is current.
-            all(meta.get(key) == value for key, value in expected.items())  # Compare every expected field.
-            for meta in current_metadata  # Check every chunk metadata record.
-        ):  # Finish the compatibility check.
-            continue  # Skip unchanged and compatible files.
+    for path in paths:
+        documents = read_document(path)
+        content = "\n".join(document.page_content for document in documents)
+        metadata = create_index_metadata(content)
+        current_metadata = get_metadata(vectorstore, where={"source": path.name})
 
-        duplicate_records = vectorstore.get(where={"file_hash": file_hash}, include=["metadatas"])  # Search for identical content.
-        duplicate_sources = {  # Collect source names for matching content.
-            meta.get("source") for meta in duplicate_records.get("metadatas", []) if meta  # Ignore empty records.
-        }  # Finish duplicate source collection.
-        if duplicate_sources - {path.name}:  # Avoid indexing the same content twice.
-            if current_metadata:  # Remove an outdated copy of this source if necessary.
-                vectorstore.delete(where={"source": path.name})  # Delete its old vectors.
-            continue  # Skip this duplicate file.
-        if current_metadata:  # Check whether an older version must be replaced.
-            vectorstore.delete(where={"source": path.name})  # Remove its old chunks.
+        if is_current(current_metadata, metadata):
+            continue
+        if has_duplicate_source(vectorstore, metadata["file_hash"], path.name):
+            if current_metadata:
+                vectorstore.delete(where={"source": path.name})
+            continue
 
-        chunks = splitter.split_documents(documents)  # Split documents into retrievable chunks.
-        if not chunks:  # Check whether the file contains usable text.
-            continue  # Skip empty files.
-        for chunk in chunks:  # Add index metadata to every chunk.
-            chunk.metadata.update(expected)  # Store version and content information with the chunk.
-        ids = [f"{path.name}-{number}" for number in range(len(chunks))]  # Create stable chunk IDs.
-        vectorstore.add_documents(chunks, ids=ids)  # Embed and persist only this file's chunks.
+        if current_metadata:
+            vectorstore.delete(where={"source": path.name})
+        chunk_count = write_file_chunks(vectorstore, splitter, path, documents, metadata)
+        if not chunk_count:
+            continue
         changed_files += 1  # Count the updated file.
-        added_chunks += len(chunks)  # Count its new chunks.
+        added_chunks += chunk_count
     return changed_files, added_chunks  # Return update statistics.
 
 

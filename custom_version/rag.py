@@ -1,6 +1,3 @@
-import ast  # 导入语法树工具，用于安全解析简单数学表达式。
-import operator  # 导入运算符函数，用于执行允许的数学运算。
-
 import chromadb  # 导入 ChromaDB，用于搜索相关文档片段。
 from openai import OpenAI  # 导入 OpenAI 兼容客户端，用于调用 DeepSeek。
 from sentence_transformers import SentenceTransformer  # 导入文本向量模型。
@@ -10,7 +7,7 @@ from ingest import EMBEDDING_MODEL  # 复用建立索引时使用的向量模型
 
 SYSTEM_PROMPT = """You are a company knowledge assistant.
 For company policies, employee handbook, and product questions, answer strictly from the reference material and do not invent facts.
-If the reference material is unrelated but the question is simple math, general knowledge, or casual conversation, answer directly.
+If the reference material is unrelated but the question is general knowledge or casual conversation, answer directly.
 If the question is company-specific and the reference material has no answer, say "No relevant information was found in the documents."
 Keep answers concise and list the source files when reference material is used.
 """
@@ -19,52 +16,6 @@ SUMMARY_PROMPT = """You summarize a company knowledge assistant conversation for
 Keep confirmed facts, topics of interest, references, and unresolved questions.
 Remove greetings, repetition, and irrelevant details. Do not add information that was not discussed.
 Write a concise English summary."""  # Set the summary-generation rules.
-
-ALLOWED_OPERATORS = {  # 设置允许执行的数学运算。
-    ast.Add: operator.add,  # 允许加法。
-    ast.Sub: operator.sub,  # 允许减法。
-    ast.Mult: operator.mul,  # 允许乘法。
-    ast.Div: operator.truediv,  # 允许除法。
-    ast.Pow: operator.pow,  # 允许乘方。
-}
-
-
-def calculate_math(expression: str) -> int | float:  # 安全计算简单数学表达式。
-    tree = ast.parse(expression, mode="eval")  # 将表达式解析成语法树。
-
-    def evaluate(node: ast.AST) -> int | float:  # 递归计算语法树节点。
-        if isinstance(node, ast.Expression):  # 判断是否为表达式根节点。
-            return evaluate(node.body)  # 继续计算根节点中的实际内容。
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):  # 判断是否为数字。
-            return node.value  # 返回数字值。
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):  # 判断是否为正负号。
-            value = evaluate(node.operand)  # 计算正负号后面的数字。
-            return value if isinstance(node.op, ast.UAdd) else -value  # 返回正数或负数。
-        if isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPERATORS:  # 判断是否为允许的二元运算。
-            left = evaluate(node.left)  # 计算左侧数字。
-            right = evaluate(node.right)  # 计算右侧数字。
-            return ALLOWED_OPERATORS[type(node.op)](left, right)  # 执行数学运算。
-        raise ValueError("Only simple mathematical expressions are supported")  # Reject unsafe functions and variables.
-
-    result = evaluate(tree)  # 计算完整表达式。
-    if abs(result) > 10**12:  # 限制结果大小，避免异常计算。
-        raise ValueError("The mathematical result is outside the supported range")  # Reject excessively large results.
-    return result  # 返回数学结果。
-
-
-def extract_math_expression(question: str) -> str | None:  # 从问题中提取简单数学表达式。
-    cleaned = question.strip().replace("?", "")  # Remove surrounding spaces and question marks.
-    for prefix in ("what is ", "calculate ", "compute "):  # Check common English math-question prefixes.
-        if cleaned.lower().startswith(prefix):  # Detect a recognized prefix.
-            cleaned = cleaned[len(prefix):].strip()  # Remove the question prefix.
-            break  # Stop after finding a prefix.
-    for suffix in (" equals", " equal to"):  # Check common English math-question suffixes.
-        if cleaned.endswith(suffix):  # 判断问题是否以数学后缀结尾。
-            cleaned = cleaned[: -len(suffix)].strip()  # Remove the question suffix.
-            break  # Stop after finding a suffix.
-    allowed = set("0123456789+-*/(). ")  # Define allowed expression characters.
-    return cleaned if cleaned and set(cleaned) <= allowed else None  # Return only a pure math expression.
-
 
 class RAG:
     def __init__(self):  # 初始化 RAG 问答对象。
@@ -104,13 +55,6 @@ class RAG:
         summary: str = "",  # 接收较早对话的摘要记忆。
         top_k: int = 4,  # 设置最多检索的文档片段数。
     ) -> tuple[str, list[dict]]:  # 返回答案和参考资料。
-        math_expression = extract_math_expression(question)  # 判断当前问题是否为简单数学题。
-        if math_expression:  # 如果识别出数学表达式，就直接本地计算。
-            try:  # 尝试计算数学表达式。
-                result = calculate_math(math_expression)  # 执行安全的数学计算。
-                return f"{math_expression} = {result:g}", []  # 直接返回计算结果，不检索公司文档。
-            except (SyntaxError, ValueError, ZeroDivisionError):  # 数学表达式不合法时继续走普通问答流程。
-                pass  # 忽略计算错误，交给后续 RAG 流程处理。
         history = history or []  # 没有历史记录时使用空列表。
         recent_history = history[-6:]  # 只保留最近三轮对话，避免上下文无限变长。
         history_text = "\n".join(  # 将历史消息整理成检索文本。

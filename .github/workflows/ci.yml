@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Test ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [custom_version, langchain_version]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ matrix.project }}/requirements.txt
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.project }}
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Check Python syntax
+        working-directory: ${{ matrix.project }}
+        run: python -m py_compile app.py config.py ingest.py rag.py
+
+      - name: Run unit tests
+        working-directory: ${{ matrix.project }}
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+  docker-build:
+    name: Build ${{ matrix.project }} Docker image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [custom_version, langchain_version]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Build the Docker image
+        run: docker build --tag rag-demo-${{ matrix.project }} ./${{ matrix.project }}
